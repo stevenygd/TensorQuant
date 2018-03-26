@@ -38,7 +38,7 @@ tf.app.flags.DEFINE_string(
     'master', '', 'The address of the TensorFlow master to use.')
 
 tf.app.flags.DEFINE_string(
-    'train_dir', '/tmp/tfmodel/',
+    'train_dir', 'tmp/tfmodel/',
     'Directory where checkpoints and event logs are written to.')
 
 tf.app.flags.DEFINE_integer('num_clones', 1,
@@ -67,7 +67,7 @@ tf.app.flags.DEFINE_integer(
     'The frequency with which logs are print.')
 
 tf.app.flags.DEFINE_integer(
-    'save_summaries_secs', 600,
+    'save_summaries_secs', 60,
     'The frequency with which summaries are saved, in seconds.')
 
 tf.app.flags.DEFINE_integer(
@@ -170,7 +170,7 @@ tf.app.flags.DEFINE_float(
 #######################
 
 tf.app.flags.DEFINE_string(
-    'dataset_name', 'imagenet', 'The name of the dataset to load.')
+    'dataset_name', 'mnist', 'The name of the dataset to load.')
 
 tf.app.flags.DEFINE_string(
     'dataset_split_name', 'train', 'The name of the train/test split.')
@@ -185,7 +185,7 @@ tf.app.flags.DEFINE_integer(
     'class for the ImageNet dataset.')
 
 tf.app.flags.DEFINE_string(
-    'model_name', 'inception_v3', 'The name of the architecture to train.')
+    'model_name', 'lenet', 'The name of the architecture to train.')
 
 tf.app.flags.DEFINE_string(
     'preprocessing_name', None, 'The name of the preprocessing to use. If left '
@@ -450,6 +450,7 @@ def main(_):
     intr_q_map=utils.quantizer_map(FLAGS.intr_qmap)
     extr_q_map=utils.quantizer_map(FLAGS.extr_qmap)
     weight_q_map=utils.quantizer_map(FLAGS.weight_qmap)
+    print("Intr QMap : %s"%intr_q_map)
 
     #######################
     # Config model_deploy #
@@ -570,22 +571,22 @@ def main(_):
     biases_name_list, biases_list = utils.get_variables_list('biases')
     for weight in weights_list:
       summaries.add(tf.summary.scalar('weight-sparsity/'+weight.name, tf.nn.zero_fraction(weight)))
-      summaries.add(tf.summary.histogram('quantized_weights/'+weight.name, weight))    
+      summaries.add(tf.summary.histogram('quantized_weights/'+weight.name, weight))
     for bias in biases_list:
       summaries.add(tf.summary.scalar('weight-sparsity/'+bias.name, tf.nn.zero_fraction(bias)))
       summaries.add(tf.summary.histogram('quantized_weights/'+bias.name, bias))
-    # summaries for overall sparsity  
-    if weights_list is not []:    
+    # summaries for overall sparsity
+    if weights_list is not []:
         weights_overall_sparsity=[ tf.reshape(x,[tf.size(x)]) for x in weights_list]
         weights_overall_sparsity=tf.concat(weights_overall_sparsity,axis=0)
-        summaries.add(tf.summary.scalar('weight-sparsity/weights-overall', 
+        summaries.add(tf.summary.scalar('weight-sparsity/weights-overall',
                                 tf.nn.zero_fraction(weights_overall_sparsity)))
     if biases_list is not []:
         biases_overall_sparsity=[ tf.reshape(x,[tf.size(x)]) for x in biases_list]
         biases_overall_sparsity=tf.concat(biases_overall_sparsity,axis=0)
-        summaries.add(tf.summary.scalar('weight-sparsity/biases-overall', 
+        summaries.add(tf.summary.scalar('weight-sparsity/biases-overall',
                                 tf.nn.zero_fraction(biases_overall_sparsity)))
-    
+
     # Add layerwise weight heatmaps
     for it in range(len(weights_name_list)):
         name = weights_name_list[it]
@@ -596,7 +597,7 @@ def main(_):
             image = utils.heatmap_fullyconnect(weight, pad = 1)
         else:
             continue
-        summaries.add(tf.summary.image(name, image)) 
+        summaries.add(tf.summary.image(name, image))
 
     #################################
     # Configure the moving averages #
@@ -644,13 +645,13 @@ def main(_):
     # Create gradient updates.
     # quantize 'clones_gradients'
     if extr_grad_quantizer is not None:
-        clones_gradients=[(extr_grad_quantizer.quantize(gv[0]),gv[1]) 
+        clones_gradients=[(extr_grad_quantizer.quantize(gv[0]),gv[1])
                             for gv in clones_gradients]
-    
+
     # Add gradients to summary
     for gv in clones_gradients:
         summaries.add(tf.summary.histogram('gradient/%s'%gv[1].op.name, gv[0]))
-        summaries.add(tf.summary.scalar('gradient-sparsity/%s'%gv[1].op.name, 
+        summaries.add(tf.summary.scalar('gradient-sparsity/%s'%gv[1].op.name,
                                     tf.nn.zero_fraction(gv[0])))
 
     grad_updates = optimizer.apply_gradients(clones_gradients,

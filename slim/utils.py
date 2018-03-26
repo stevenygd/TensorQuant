@@ -56,7 +56,7 @@ def quantizer_selector(selector_str, arg_list):
                                     )
     else:
         raise ValueError('Quantizer %s not recognized!'%(selector_str))
-    return quantizer        
+    return quantizer
 
 
 def get_available_gpus():
@@ -114,6 +114,7 @@ def quantizer_map(qmap_file):
         return None
     with open(qmap_file,'r') as hfile:
         qmap = json.load(hfile)
+        qmap = {str(k):str(v) for k,v in qmap.iteritems()}
 
     # change strings in qmap into quantizer objects
     for key in qmap:
@@ -145,7 +146,7 @@ def get_nb_params_shape(shape):
     nb_params = 1
     for dim in shape:
         nb_params = nb_params*int(dim)
-    return nb_params 
+    return nb_params
 
 def compute_sparsity(data):
     data=np.array(data)
@@ -156,7 +157,7 @@ def compute_sparsity(data):
 
 def get_variables_list(keyword):
     '''
-    Returns a list with the names of the quantized variables and 
+    Returns a list with the names of the quantized variables and
     a list with the tensors of the quantized variables. If there
     is no quantized version, the regular variable is used.
     Arg:
@@ -196,7 +197,7 @@ def heatmap_conv(kernel, pad = 1):
     see: gist.github.com/kukuruza/03731dc494603ceab0c5
 
     Args:
-    kernel: tensor of shape [height, width, NumChannels, NumKernels]     
+    kernel: tensor of shape [height, width, NumChannels, NumKernels]
     pad: number of black pixels around each filter (between them)
 
     Return:
@@ -225,24 +226,24 @@ def heatmap_conv(kernel, pad = 1):
     blue_channel = (tf.ones_like(kernel)+tf.to_float(kernel<0)*kernel)
     kernel = tf.transpose(tf.stack([red_channel,green_channel,blue_channel]), (4,1,2,3,0))
     #kernel shape: [features, height, width, channels, rgb]
-    # channels will be the batch, rgb are the color channels. 
+    # channels will be the batch, rgb are the color channels.
     # features will be reduced to single image
 
     # pad X and Y
-    kernel = tf.pad(kernel, tf.constant( 
+    kernel = tf.pad(kernel, tf.constant(
     [[0,0],[pad,pad],[pad, pad],[0,0],[0,0]] ), mode = 'CONSTANT')
     tile_height= kernel.get_shape().dims[1].value
     tile_width= kernel.get_shape().dims[2].value
     # 2*pad added to height and width
 
     # organize grid on Y axis
-    kernel = tf.reshape(kernel, tf.stack([grid_X, tile_height * grid_Y, 
+    kernel = tf.reshape(kernel, tf.stack([grid_X, tile_height * grid_Y,
                                         tile_width, kernel_channels, 3]))
     # switch X and Y axes
     kernel = tf.transpose(kernel, (0, 2, 1, 3, 4))
     #kernel shape: [features, width, height, channels, rgb]
     # organize grid on X axis, drop 5th dimension
-    kernel = tf.reshape(kernel, tf.stack([tile_width * grid_X, tile_height * grid_Y, 
+    kernel = tf.reshape(kernel, tf.stack([tile_width * grid_X, tile_height * grid_Y,
                                             kernel_channels, 3]))
     kernel = tf.transpose(kernel, (2, 1, 0, 3))
     #kernel shape: [channels, height, width, rgb]
@@ -260,7 +261,7 @@ def heatmap_fullyconnect(kernel, pad = 1):
     '''Visualize fc-layer as an image.
 
     Args:
-        kernel: tensor of shape [kernel_inputs, kernel_outputs]   
+        kernel: tensor of shape [kernel_inputs, kernel_outputs]
         pad: number of black pixels around filter
 
     Return:
@@ -285,9 +286,9 @@ def heatmap_fullyconnect(kernel, pad = 1):
     # kernel shape: [batch, height, width, rgb]
 
     # pad X and Y
-    kernel = tf.pad(kernel, tf.constant( 
+    kernel = tf.pad(kernel, tf.constant(
     [[0,0],[pad,pad],[pad, pad],[0,0]]), mode = 'CONSTANT')
-    
+
     '''
     # resize image, for better visibility
     old_shape = kernel.get_shape().as_list()
@@ -343,7 +344,7 @@ def get_variables_count_dict(key):
     weights_name_list, weights_list = get_variables_list(key)
 
     # count number of elements in each layer
-    weights_list_param_count = [ get_nb_params_shape(x.get_shape()) 
+    weights_list_param_count = [ get_nb_params_shape(x.get_shape())
                                     for x in weights_list]
     weights_list_param_count = dict(zip(weights_name_list, weights_list_param_count))
     weights_overall_sparsity_op=[ tf.reshape(x,[tf.size(x)]) for x in weights_list]

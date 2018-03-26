@@ -41,6 +41,7 @@ python train_image_classifier.py \
   --learning_rate_decay_type=fixed \
   --weight_decay=0 \
   --weight_qmap=./tmp/lenet-model/QMaps/weights.json \
+  --intr_qmap=./tmp/lenet-model/QMaps/intr_qmap.json;
 #  --intr_grad_quantizer=sparse,0.1 \
 # --weight_qmap=./tmp/lenet-model/QMaps/weights.json \
 #  --intr_grad_quantizer=nearest,2,1 \
