@@ -1,0 +1,4 @@
+{
+    "conv":"stochastic,16,14",
+    "fc":"stochastic,16,14"
+}
