@@ -450,7 +450,7 @@ def main(_):
     intr_q_map=utils.quantizer_map(FLAGS.intr_qmap)
     extr_q_map=utils.quantizer_map(FLAGS.extr_qmap)
     weight_q_map=utils.quantizer_map(FLAGS.weight_qmap)
-    print("Intr QMap : %s"%intr_q_map)
+    print("Intr QMap:%s"%intr_q_map)
 
     #######################
     # Config model_deploy #
