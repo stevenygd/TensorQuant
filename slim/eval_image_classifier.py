@@ -138,7 +138,7 @@ def main(_):
     intr_q_map=utils.quantizer_map(FLAGS.intr_qmap)
     extr_q_map=utils.quantizer_map(FLAGS.extr_qmap)
     weight_q_map=utils.quantizer_map(FLAGS.weight_qmap)
-    
+
     ####################
     # Select the model #
     ####################
@@ -178,17 +178,17 @@ def main(_):
     # Define the model #
     ####################
     start_time_build = time.time()
- 
+
     images, labels = tf.train.batch(
         [image, label],
         batch_size=FLAGS.batch_size,
         num_threads=FLAGS.num_preprocessing_threads,
         capacity=5 * FLAGS.batch_size)
-    
+
     logits, endpoints = network_fn(images)
     predictions= tf.argmax(logits, 1)
     labels = tf.squeeze(labels)
-    
+
     #tf.logging.info('Number of parameters per layer and endpoint:')
     #for var in endpoints:
     #    tf.logging.info('%s: %d'%(var,utils.count_trainable_params(var)))
@@ -217,7 +217,7 @@ def main(_):
       op = tf.Print(op, [value], summary_name)
       tf.add_to_collection(tf.GraphKeys.SUMMARIES, op)
 
-    # TODO(sguada) use num_epochs=1    
+    # TODO(sguada) use num_epochs=1
     if FLAGS.max_num_batches and FLAGS.max_num_batches > 0:
       num_batches = FLAGS.max_num_batches
     else:
@@ -248,17 +248,17 @@ def main(_):
     activation_layerwise_sparsity = {}
     for key in endpoints.keys():
       activation_layerwise_sparsity[key]=tf.nn.zero_fraction(endpoints[key])
-        
+
     '''
     # get the quantized weight tensors for sparsity estimation
     weights_name_list, weights_list = utils.get_variables_list('weights')
     biases_name_list, biases_list = utils.get_variables_list('biases')
 
     # count number of elements in each layer
-    weights_list_param_count = [ utils.get_nb_params_shape(x.get_shape()) 
+    weights_list_param_count = [ utils.get_nb_params_shape(x.get_shape())
                                     for x in weights_list]
     weights_list_param_count = dict(zip(weights_name_list, weights_list_param_count))
-    biases_list_param_count = [ utils.get_nb_params_shape(x.get_shape()) 
+    biases_list_param_count = [ utils.get_nb_params_shape(x.get_shape())
                                     for x in biases_list]
     biases_list_param_count = dict(zip(biases_name_list, biases_list_param_count))
 
@@ -293,7 +293,7 @@ def main(_):
     #config.gpu_options.per_process_gpu_memory_fraction = 0.7
 
     # Final ops, used for statistics
-    final_op = (list(names_to_values.values()), 
+    final_op = (list(names_to_values.values()),
                        weights_layerwise_sparsity_op, biases_layerwise_sparsity_op,
                        weights_overall_sparsity_op, biases_overall_sparsity_op,
                        list(activation_layerwise_sparsity.values()) )
@@ -304,7 +304,7 @@ def main(_):
         checkpoint_path=checkpoint_path,
         logdir=FLAGS.eval_dir,
         num_evals=num_batches,
-        eval_op=list(names_to_updates.values()), 
+        eval_op=list(names_to_updates.values()),
         final_op=final_op,
         variables_to_restore=variables_to_restore,
         session_config=config)
@@ -350,7 +350,7 @@ def main(_):
     for key in activation_layerwise_sparsity.keys():
         print("     %s: %.2f%%"%(key, activation_layerwise_sparsity[key]*100))
     print('Comment: %s'%(FLAGS.comment))
-   
+
     tf.train.export_meta_graph(filename=FLAGS.checkpoint_path+'/model.meta')
 
     # write data to .json file

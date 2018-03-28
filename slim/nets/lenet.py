@@ -41,8 +41,8 @@ def lenet(images, num_classes=10, is_training=False, reuse=None,
           dropout_keep_prob=0.5,
           prediction_fn=slim.softmax,
           scope='LeNet',
-          conv2d=slim.conv2d, 
-          max_pool2d=slim.max_pool2d, 
+          conv2d=slim.conv2d,
+          max_pool2d=slim.max_pool2d,
           fully_connected = slim.fully_connected):
   """Creates a variant of the LeNet model.
 
@@ -73,13 +73,16 @@ def lenet(images, num_classes=10, is_training=False, reuse=None,
   end_points = {}
 
   with tf.variable_scope(scope, 'LeNet', [images, num_classes],reuse=reuse):
-        net = conv2d(images, 32, [5, 5], scope='conv1')
+        # net = conv2d(images, 32, [5, 5], scope='conv1')
+        net = conv2d(images, 8, [5, 5], scope='conv1')
         net = max_pool2d(net, [2, 2], 2, scope='pool1')
-        net = conv2d(net, 64, [5, 5], scope='conv2')
+        # net = conv2d(net, 64, [5, 5], scope='conv2')
+        net = conv2d(net, 16, [5, 5], scope='conv2')
         net = max_pool2d(net, [2, 2], 2, scope='pool2')
         net = slim.flatten(net)
         end_points['Flatten'] = net
-        net = fully_connected(net, 1024, scope='fc3')
+        # net = fully_connected(net, 1024, scope='fc3')
+        net = fully_connected(net, 128, scope='fc3')
         net = slim.dropout(net, dropout_keep_prob, is_training=is_training,
                            scope='dropout3')
         logits = fully_connected(net, num_classes, activation_fn=None,

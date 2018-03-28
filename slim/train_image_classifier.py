@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
+import math
 
 from tensorflow.python.ops import control_flow_ops
 from datasets import dataset_factory
@@ -31,11 +32,7 @@ from Quantize import QSGD
 from Quantize import QRMSProp
 
 import utils
-
-slim = tf.contrib.slim
-
-tf.app.flags.DEFINE_string(
-    'master', '', 'The address of the TensorFlow master to use.')
+import numpy as np
 
 tf.app.flags.DEFINE_string(
     'train_dir', 'tmp/tfmodel/',
@@ -43,9 +40,6 @@ tf.app.flags.DEFINE_string(
 
 tf.app.flags.DEFINE_integer('num_clones', 1,
                             'Number of model clones to deploy.')
-
-tf.app.flags.DEFINE_boolean('clone_on_cpu', False,
-                            'Use CPUs to deploy clones.')
 
 tf.app.flags.DEFINE_integer('worker_replicas', 1, 'Number of worker replicas.')
 
@@ -59,12 +53,16 @@ tf.app.flags.DEFINE_integer(
     'The number of parallel readers that read data from the dataset.')
 
 tf.app.flags.DEFINE_integer(
-    'num_preprocessing_threads', 8,
+    'num_preprocessing_threads', 1,
     'The number of threads used to create the batches.')
 
 tf.app.flags.DEFINE_integer(
     'log_every_n_steps', 10,
     'The frequency with which logs are print.')
+
+tf.app.flags.DEFINE_integer(
+    'eval_every_n_steps', 1000,
+    'The frequency with which evaluation is done.')
 
 tf.app.flags.DEFINE_integer(
     'save_summaries_secs', 60,
@@ -152,18 +150,10 @@ tf.app.flags.DEFINE_float(
     'num_epochs_per_decay', 2.0,
     'Number of epochs after which learning rate decays.')
 
-tf.app.flags.DEFINE_bool(
-    'sync_replicas', False,
-    'Whether or not to synchronize the replicas during training.')
-
 tf.app.flags.DEFINE_integer(
     'replicas_to_aggregate', 1,
     'The Number of gradients to collect before updating params.')
 
-tf.app.flags.DEFINE_float(
-    'moving_average_decay', None,
-    'The decay to use for the moving average.'
-    'If left as None, then moving averages are not used.')
 
 #######################
 # Dataset Flags #
@@ -268,8 +258,6 @@ def _configure_learning_rate(num_samples_per_epoch, global_step):
   """
   decay_steps = int(num_samples_per_epoch / FLAGS.batch_size *
                     FLAGS.num_epochs_per_decay)
-  if FLAGS.sync_replicas:
-    decay_steps /= FLAGS.replicas_to_aggregate
 
   if FLAGS.learning_rate_decay_type == 'exponential':
     return tf.train.exponential_decay(FLAGS.learning_rate,
@@ -332,7 +320,8 @@ def _configure_optimizer(learning_rate, quantizer=None):
     optimizer = tf.train.MomentumOptimizer(
         learning_rate,
         momentum=FLAGS.momentum,
-        name='Momentum')
+        name='Momentum',
+        use_nesterov=True)
   elif FLAGS.optimizer == 'rmsprop':
     if quantizer is None:
       optimizer = tf.train.RMSPropOptimizer(
@@ -357,55 +346,6 @@ def _configure_optimizer(learning_rate, quantizer=None):
     raise ValueError('Optimizer [%s] was not recognized', FLAGS.optimizer)
   return optimizer
 
-def _get_init_fn():
-  """Returns a function run by the chief worker to warm-start the training.
-
-  Note that the init_fn is only run when initializing the model during the very
-  first global step.
-
-  Returns:
-    An init function run by the supervisor.
-  """
-  if FLAGS.checkpoint_path is None:
-    return None
-
-  # Warn the user if a checkpoint exists in the train_dir. Then we'll be
-  # ignoring the checkpoint anyway.
-  if tf.train.latest_checkpoint(FLAGS.train_dir):
-    tf.logging.info(
-        'Ignoring --checkpoint_path because a checkpoint already exists in %s'
-        % FLAGS.train_dir)
-    return None
-
-  exclusions = []
-  if FLAGS.checkpoint_exclude_scopes:
-    exclusions = [scope.strip()
-                  for scope in FLAGS.checkpoint_exclude_scopes.split(',')]
-
-  # TODO(sguada) variables.filter_variables()
-  variables_to_restore = []
-  for var in slim.get_model_variables():
-    excluded = False
-    for exclusion in exclusions:
-      if var.op.name.startswith(exclusion):
-        excluded = True
-        break
-    if not excluded:
-      variables_to_restore.append(var)
-
-  if tf.gfile.IsDirectory(FLAGS.checkpoint_path):
-    checkpoint_path = tf.train.latest_checkpoint(FLAGS.checkpoint_path)
-  else:
-    checkpoint_path = FLAGS.checkpoint_path
-
-  tf.logging.info('Fine-tuning from %s' % checkpoint_path)
-
-  return slim.assign_from_checkpoint_fn(
-      checkpoint_path,
-      variables_to_restore,
-      ignore_missing_vars=FLAGS.ignore_missing_vars)
-
-
 def _get_variables_to_train():
   """Returns a list of variables to train.
 
@@ -429,264 +369,229 @@ def main(_):
     raise ValueError('You must supply the dataset directory with --dataset_dir')
 
   tf.logging.set_verbosity(tf.logging.INFO)
+
   with tf.Graph().as_default():
+    with tf.Session() as sess:
+      #######################
+      # Quantizers          #
+      #######################
 
-    #######################
-    # Quantizers          #
-    #######################
+      if FLAGS.intr_grad_quantizer is not '':
+          qtype, qargs= utils.split_quantizer_str(FLAGS.intr_grad_quantizer)
+          intr_grad_quantizer= utils.quantizer_selector(qtype, qargs)
+      else:
+          intr_grad_quantizer= None
 
-    if FLAGS.intr_grad_quantizer is not '':
-        qtype, qargs= utils.split_quantizer_str(FLAGS.intr_grad_quantizer)
-        intr_grad_quantizer= utils.quantizer_selector(qtype, qargs)
-    else:
-        intr_grad_quantizer= None
+      if FLAGS.extr_grad_quantizer is not '':
+          qtype, qargs= utils.split_quantizer_str(FLAGS.extr_grad_quantizer)
+          extr_grad_quantizer= utils.quantizer_selector(qtype, qargs)
+      else:
+          extr_grad_quantizer= None
 
-    if FLAGS.extr_grad_quantizer is not '':
-        qtype, qargs= utils.split_quantizer_str(FLAGS.extr_grad_quantizer)
-        extr_grad_quantizer= utils.quantizer_selector(qtype, qargs)
-    else:
-        extr_grad_quantizer= None
+      intr_q_map=utils.quantizer_map(FLAGS.intr_qmap)
+      extr_q_map=utils.quantizer_map(FLAGS.extr_qmap)
+      weight_q_map=utils.quantizer_map(FLAGS.weight_qmap)
+      print("Intr QMap:%s"%intr_q_map)
 
-    intr_q_map=utils.quantizer_map(FLAGS.intr_qmap)
-    extr_q_map=utils.quantizer_map(FLAGS.extr_qmap)
-    weight_q_map=utils.quantizer_map(FLAGS.weight_qmap)
-    print("Intr QMap:%s"%intr_q_map)
+      # Create global_step
+      global_step = tf.train.create_global_step()
 
-    #######################
-    # Config model_deploy #
-    #######################
-    deploy_config = model_deploy.DeploymentConfig(
-        num_clones=FLAGS.num_clones,
-        clone_on_cpu=FLAGS.clone_on_cpu,
-        replica_id=FLAGS.task,
-        num_replicas=FLAGS.worker_replicas,
-        num_ps_tasks=FLAGS.num_ps_tasks)
+      ######################
+      # Select the dataset #
+      ######################
+      dataset = dataset_factory.get_dataset(
+          FLAGS.dataset_name, FLAGS.dataset_split_name, FLAGS.dataset_dir)
 
-    # Create global_step
-    with tf.device(deploy_config.variables_device()):
-      global_step = slim.create_global_step()
+      ######################
+      # Select the network #
+      ######################
+      network_fn = nets_factory.get_network_fn(
+          FLAGS.model_name,
+          num_classes=(dataset.num_classes - FLAGS.labels_offset),
+          weight_decay=FLAGS.weight_decay,
+          is_training=True,
+          intr_q_map=intr_q_map, extr_q_map=extr_q_map,
+          weight_q_map=weight_q_map)
 
-    ######################
-    # Select the dataset #
-    ######################
-    dataset = dataset_factory.get_dataset(
-        FLAGS.dataset_name, FLAGS.dataset_split_name, FLAGS.dataset_dir)
-
-    ######################
-    # Select the network #
-    ######################
-    network_fn = nets_factory.get_network_fn(
-        FLAGS.model_name,
-        num_classes=(dataset.num_classes - FLAGS.labels_offset),
-        weight_decay=FLAGS.weight_decay,
-        is_training=True,
-        intr_q_map=intr_q_map, extr_q_map=extr_q_map,
-        weight_q_map=weight_q_map)
-
-    #####################################
-    # Select the preprocessing function #
-    #####################################
-    preprocessing_name = FLAGS.preprocessing_name or FLAGS.model_name
-    image_preprocessing_fn = preprocessing_factory.get_preprocessing(
-        preprocessing_name,
-        is_training=True)
-
-    ##############################################################
-    # Create a dataset provider that loads data from the dataset #
-    ##############################################################
-    with tf.device(deploy_config.inputs_device()):
-      provider = slim.dataset_data_provider.DatasetDataProvider(
-          dataset,
-          num_readers=FLAGS.num_readers,
-          common_queue_capacity=20 * FLAGS.batch_size,
-          common_queue_min=10 * FLAGS.batch_size)
-      [image, label] = provider.get(['image', 'label'])
-      label -= FLAGS.labels_offset
-
+      ##############################################################
+      # Create a dataset provider that loads data from the dataset #
+      ##############################################################
+      images = tf.placeholder(tf.float32, shape=[FLAGS.batch_size, 28, 28, 1])
+      labels = tf.placeholder(tf.float32, shape=[FLAGS.batch_size, 10])
       train_image_size = FLAGS.train_image_size or network_fn.default_image_size
 
-      image = image_preprocessing_fn(image, train_image_size, train_image_size)
-
-      images, labels = tf.train.batch(
-          [image, label],
-          batch_size=FLAGS.batch_size,
-          num_threads=FLAGS.num_preprocessing_threads,
-          capacity=5 * FLAGS.batch_size)
-      labels = slim.one_hot_encoding(
-          labels, dataset.num_classes - FLAGS.labels_offset)
-      batch_queue = slim.prefetch_queue.prefetch_queue(
-          [images, labels], capacity=2 * deploy_config.num_clones)
-
-    ####################
-    # Define the model #
-    ####################
-    def clone_fn(batch_queue):
-      """Allows data parallelism by creating multiple clones of network_fn."""
-      images, labels = batch_queue.dequeue()
+      ####################
+      # Define the model #
+      ####################
       logits, end_points = network_fn(images)
 
-      #############################
       # Specify the loss function #
-      #############################
-      if 'AuxLogits' in end_points:
-        tf.losses.softmax_cross_entropy(
-            logits=end_points['AuxLogits'], onehot_labels=labels,
-            label_smoothing=FLAGS.label_smoothing, weights=0.4, scope='aux_loss')
-      tf.losses.softmax_cross_entropy(
+      total_loss = tf.losses.softmax_cross_entropy(
           logits=logits, onehot_labels=labels,
           label_smoothing=FLAGS.label_smoothing, weights=1.0)
-      return end_points
 
-    # Gather initial summaries.
-    summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
+      # Gather initial summaries.
+      summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
 
-    clones = model_deploy.create_clones(deploy_config, clone_fn, [batch_queue])
-    first_clone_scope = deploy_config.clone_scope(0)
-    # Gather update_ops from the first clone. These contain, for example,
-    # the updates for the batch_norm variables created by network_fn.
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS, first_clone_scope)
+      # Gather update_ops from the first clone. These contain, for example,
+      # the updates for the batch_norm variables created by network_fn.
+      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
-    #############
-    # Summaries #
-    #############
+      #############
+      # Summaries #
+      #############
 
-    # Add summaries for end_points.
-    end_points = clones[0].outputs
-    for end_point in end_points:
-      x = end_points[end_point]
-      summaries.add(tf.summary.histogram('activations/' + end_point, x))
-      summaries.add(tf.summary.scalar('sparse_activations/' + end_point,
-                                      tf.nn.zero_fraction(x)))
+      # Add summaries for end_points.
+      for end_point in end_points:
+        x = end_points[end_point]
+        summaries.add(tf.summary.histogram('activations/' + end_point, x))
+        summaries.add(tf.summary.scalar('sparse_activations/' + end_point,
+                                        tf.nn.zero_fraction(x)))
 
-    # Add summaries for losses.
-    for loss in tf.get_collection(tf.GraphKeys.LOSSES, first_clone_scope):
-      summaries.add(tf.summary.scalar('losses/%s' % loss.op.name, loss))
+      # Add summaries for losses.
+      for loss in tf.get_collection(tf.GraphKeys.LOSSES):
+        summaries.add(tf.summary.scalar('losses/%s' % loss.op.name, loss))
+      summaries.add(tf.summary.scalar('losses/total', total_loss))
 
-    # Add summaries for variables.
-    for variable in slim.get_model_variables():
-      summaries.add(tf.summary.histogram(variable.op.name, variable))
-
-    # Add summaries for sparsity.
-    weights_name_list, weights_list = utils.get_variables_list('weights')
-    biases_name_list, biases_list = utils.get_variables_list('biases')
-    for weight in weights_list:
-      summaries.add(tf.summary.scalar('weight-sparsity/'+weight.name, tf.nn.zero_fraction(weight)))
-      summaries.add(tf.summary.histogram('quantized_weights/'+weight.name, weight))
-    for bias in biases_list:
-      summaries.add(tf.summary.scalar('weight-sparsity/'+bias.name, tf.nn.zero_fraction(bias)))
-      summaries.add(tf.summary.histogram('quantized_weights/'+bias.name, bias))
-    # summaries for overall sparsity
-    if weights_list is not []:
-        weights_overall_sparsity=[ tf.reshape(x,[tf.size(x)]) for x in weights_list]
-        weights_overall_sparsity=tf.concat(weights_overall_sparsity,axis=0)
-        summaries.add(tf.summary.scalar('weight-sparsity/weights-overall',
-                                tf.nn.zero_fraction(weights_overall_sparsity)))
-    if biases_list is not []:
-        biases_overall_sparsity=[ tf.reshape(x,[tf.size(x)]) for x in biases_list]
-        biases_overall_sparsity=tf.concat(biases_overall_sparsity,axis=0)
-        summaries.add(tf.summary.scalar('weight-sparsity/biases-overall',
-                                tf.nn.zero_fraction(biases_overall_sparsity)))
-
-    # Add layerwise weight heatmaps
-    for it in range(len(weights_name_list)):
-        name = weights_name_list[it]
-        weight = weights_list[it]
-        if weight.get_shape().ndims == 4:
-            image = utils.heatmap_conv(weight, pad = 1)
-        elif weight.get_shape().ndims == 2:
-            image = utils.heatmap_fullyconnect(weight, pad = 1)
-        else:
-            continue
-        summaries.add(tf.summary.image(name, image))
-
-    #################################
-    # Configure the moving averages #
-    #################################
-    if FLAGS.moving_average_decay:
-      moving_average_variables = slim.get_model_variables()
-      variable_averages = tf.train.ExponentialMovingAverage(
-          FLAGS.moving_average_decay, global_step)
-    else:
-      moving_average_variables, variable_averages = None, None
-
-    #########################################
-    # Configure the optimization procedure. #
-    #########################################
-    with tf.device(deploy_config.optimizer_device()):
+      #########################################
+      # Configure the optimization procedure. #
+      #########################################
       learning_rate = _configure_learning_rate(dataset.num_samples, global_step)
       optimizer = _configure_optimizer(learning_rate, intr_grad_quantizer)
       summaries.add(tf.summary.scalar('learning_rate', learning_rate))
 
-    if FLAGS.sync_replicas:
-      # If sync_replicas is enabled, the averaging will be done in the chief
-      # queue runner.
-      optimizer = tf.train.SyncReplicasOptimizer(
-          opt=optimizer,
-          replicas_to_aggregate=FLAGS.replicas_to_aggregate,
-          variable_averages=variable_averages,
-          variables_to_average=moving_average_variables,
-          replica_id=tf.constant(FLAGS.task, tf.int32, shape=()),
-          total_num_replicas=FLAGS.worker_replicas)
-    elif FLAGS.moving_average_decay:
-      # Update ops executed locally by trainer.
-      update_ops.append(variable_averages.apply(moving_average_variables))
 
-    # Variables to train.
-    variables_to_train = _get_variables_to_train()
+      # Variables to train.
+      variables_to_train = _get_variables_to_train()
 
-    #  and returns a train_tensor and summary_op
-    total_loss, clones_gradients = model_deploy.optimize_clones(
-        clones,
-        optimizer,
-        var_list=variables_to_train)
-    # Add total_loss to summary.
-    summaries.add(tf.summary.scalar('total_loss', total_loss))
+      # #  and returns a train_tensor and summary_op
+      # # Add total_loss to summary.
+      summaries.add(tf.summary.scalar('total_loss', total_loss))
 
-    # Create gradient updates.
-    # quantize 'clones_gradients'
-    if extr_grad_quantizer is not None:
-        clones_gradients=[(extr_grad_quantizer.quantize(gv[0]),gv[1])
-                            for gv in clones_gradients]
+      # Create gradient updates.
+      # quantize 'clones_gradients'
+      clones_gradients = optimizer.compute_gradients(total_loss)
+      if extr_grad_quantizer is not None:
+          clones_gradients=[(extr_grad_quantizer.quantize(gv[0]),gv[1])
+                              for gv in clones_gradients]
 
-    # Add gradients to summary
-    for gv in clones_gradients:
-        summaries.add(tf.summary.histogram('gradient/%s'%gv[1].op.name, gv[0]))
-        summaries.add(tf.summary.scalar('gradient-sparsity/%s'%gv[1].op.name,
-                                    tf.nn.zero_fraction(gv[0])))
+      # Add gradients to summary
+      for gv in clones_gradients:
+          summaries.add(tf.summary.histogram('gradient/%s'%gv[1].op.name, gv[0]))
+          summaries.add(tf.summary.scalar('gradient-sparsity/%s'%gv[1].op.name,
+                                      tf.nn.zero_fraction(gv[0])))
 
-    grad_updates = optimizer.apply_gradients(clones_gradients,
-                                             global_step=global_step)
-    update_ops.append(grad_updates)
+      grad_updates = optimizer.apply_gradients(clones_gradients,
+                                               global_step=global_step)
+      update_ops.append(grad_updates)
 
-    update_op = tf.group(*update_ops)
-    train_tensor = control_flow_ops.with_dependencies([update_op], total_loss,
-                                                      name='train_op')
+      update_op = tf.group(*update_ops)
+      train_tensor = control_flow_ops.with_dependencies([update_op], total_loss,
+                                                        name='train_op')
 
-    # Add the summaries from the first clone. These contain the summaries
-    # created by model_fn and either optimize_clones() or _gather_clone_loss().
-    summaries |= set(tf.get_collection(tf.GraphKeys.SUMMARIES,
-                                       first_clone_scope))
+      # Ensemble related ops
+      variables_to_ensemble = {
+              v.name:tf.Variable(tf.zeros_like(v)) for v in variables_to_train
+      }
+      ensemble_counter = tf.Variable(0.)
+      variable_ensemble_ops = [
+        tf.assign(variables_to_ensemble[v.name],
+                 (variables_to_ensemble[v.name]*ensemble_counter + v)/(ensemble_counter + 1.)) \
+        for v in variables_to_train
+      ]
+      ensemble_counter_update_op = tf.assign(ensemble_counter, ensemble_counter + 1)
+      ensemble_replace_ops = [
+        tf.assign(v, variables_to_ensemble[v.name]) for v in variables_to_train
+      ]
 
-    # Merge all summaries together.
-    summary_op = tf.summary.merge(list(summaries), name='summary_op')
+      ##############################
+      #  Evaluation pass  (Start)  #
+      ##############################
+
+      # Define the metrics:
+
+      eval_pred= tf.squeeze(tf.argmax(logits, 1))
+      eval_gtrs= tf.squeeze(tf.argmax(labels, 1))
+
+      acc_value, acc_update = tf.metrics.accuracy(eval_pred, eval_gtrs)
+      val_summary = tf.summary.scalar('val_acc', acc_value, collections=[])
+
+      num_batches = math.ceil(dataset.num_samples / (float(FLAGS.batch_size)) )
+
+      # Merge all summaries together.
+      summary_op = tf.summary.merge(list(summaries))
+
+      train_writer = tf.summary.FileWriter(FLAGS.train_dir, sess.graph)
+
+      ###########################
+      # Kicks off the training. #
+      ###########################
+      sess.run(tf.global_variables_initializer())
+      from tensorflow.examples.tutorials.mnist import input_data
+      mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
 
 
-    ###########################
-    # Kicks off the training. #
-    ###########################
-    slim.learning.train(
-        train_tensor,
-        logdir=FLAGS.train_dir,
-        master=FLAGS.master,
-        is_chief=(FLAGS.task == 0),
-        init_fn=_get_init_fn(),
-        summary_op=summary_op,
-        number_of_steps=FLAGS.max_number_of_steps,
-        log_every_n_steps=FLAGS.log_every_n_steps,
-        save_summaries_secs=FLAGS.save_summaries_secs,
-        save_interval_secs=FLAGS.save_interval_secs,
-        sync_optimizer=optimizer if FLAGS.sync_replicas else None)
+      total_epoches = 100
+      for e in range(total_epoches):
+        # Training pass
+        sess.run(tf.local_variables_initializer())
+        num_training_batches = 60000//FLAGS.batch_size
+        for i in range(num_training_batches):
+            batch_xs, batch_ys = mnist.train.next_batch(FLAGS.batch_size)
+            if i % FLAGS.log_every_n_steps == 0 and i > 0:
+                summary_value, loss_value, acc = sess.run(
+                  [summary_op, total_loss, acc_value],
+                  feed_dict={
+                    images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
+                    labels : batch_ys
+                })
+                train_writer.add_summary(summary_value, i+e*num_training_batches)
 
+                print("[%d/%d] loss %.5f acc %.5f"\
+                     %(i, num_training_batches, loss_value, acc))
+                sess.run(tf.local_variables_initializer())
+
+            sess.run([update_op, acc_update], feed_dict={
+                images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
+                labels : batch_ys
+            })
+
+        # Validation pass
+        sess.run(tf.local_variables_initializer())
+        for i in range(10000//FLAGS.batch_size):
+            batch_xs, batch_ys = mnist.validation.next_batch(FLAGS.batch_size)
+            sess.run([acc_update], feed_dict={
+                images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
+                labels : batch_ys
+            })
+        val_acc, val_summary_value = sess.run([acc_value, val_summary], feed_dict={
+          images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
+          labels : batch_ys,
+        })
+        print("Epoch[%d/%d] : valacc:%.5f"%(e, total_epoches, val_acc))
+        train_writer.add_summary(val_summary_value, e)
+
+        # Ensemble pass
+        if (e+1) % 10 == 0 and e > 10:
+            sess.run(variable_ensemble_ops)
+            sess.run(ensemble_counter_update_op)
+            print("Ensembled epoch %d weights"%e)
+
+
+      # Validation Pass for Weight Ensembled Networks
+      sess.run(tf.local_variables_initializer())
+      sess.run(ensemble_replace_ops)
+      for i in range(10000//FLAGS.batch_size):
+          batch_xs, batch_ys = mnist.validation.next_batch(FLAGS.batch_size)
+          sess.run([acc_update], feed_dict={
+              images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
+              labels : batch_ys
+          })
+      val_acc, val_summary_value = sess.run([acc_value, val_summary], feed_dict={
+        images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
+        labels : batch_ys,
+      })
+      print("Ensembled network valacc:%.5f"%val_acc)
 
 if __name__ == '__main__':
   tf.app.run()
