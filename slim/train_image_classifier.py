@@ -38,8 +38,7 @@ tf.app.flags.DEFINE_string(
     'train_dir', 'tmp/tfmodel/',
     'Directory where checkpoints and event logs are written to.')
 
-tf.app.flags.DEFINE_integer('num_clones', 1,
-                            'Number of model clones to deploy.')
+tf.app.flags.DEFINE_integer('num_epoches', 50, 'Number epoches.')
 
 tf.app.flags.DEFINE_integer('worker_replicas', 1, 'Number of worker replicas.')
 
@@ -317,6 +316,7 @@ def _configure_optimizer(learning_rate, quantizer=None):
         l1_regularization_strength=FLAGS.ftrl_l1,
         l2_regularization_strength=FLAGS.ftrl_l2)
   elif FLAGS.optimizer == 'momentum':
+    print("Using momentum optimizer")
     optimizer = tf.train.MomentumOptimizer(
         learning_rate,
         momentum=FLAGS.momentum,
@@ -530,8 +530,7 @@ def main(_):
       from tensorflow.examples.tutorials.mnist import input_data
       mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
 
-
-      total_epoches = 100
+      total_epoches = FLAGS.num_epoches
       for e in range(total_epoches):
         # Training pass
         sess.run(tf.local_variables_initializer())
@@ -572,7 +571,8 @@ def main(_):
         train_writer.add_summary(val_summary_value, e)
 
         # Ensemble pass
-        if (e+1) % 10 == 0 and e > 10:
+        # if (e+1) % 5 == 0:
+        if (e+1) % 10 == 0 and e > 50:
             sess.run(variable_ensemble_ops)
             sess.run(ensemble_counter_update_op)
             print("Ensembled epoch %d weights"%e)
@@ -592,6 +592,7 @@ def main(_):
         labels : batch_ys,
       })
       print("Ensembled network valacc:%.5f"%val_acc)
+      train_writer.add_summary(val_summary_value, total_epoches)
 
 if __name__ == '__main__':
   tf.app.run()

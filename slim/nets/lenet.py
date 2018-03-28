@@ -38,7 +38,8 @@ slim = tf.contrib.slim
 
 
 def lenet(images, num_classes=10, is_training=False, reuse=None,
-          dropout_keep_prob=0.5,
+          dropout_keep_prob=1.,
+          # dropout_keep_prob=0.5,
           prediction_fn=slim.softmax,
           scope='LeNet',
           conv2d=slim.conv2d,

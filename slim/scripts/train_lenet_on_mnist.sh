@@ -11,19 +11,24 @@
 
 # Where the checkpoint and logs will be saved to.
 
-TRAIN_DIR=./tmp/lenet-model/test
+# TRAIN_DIR=./tmp/lenet-model/test
+TRAIN_DIR=./tmp/lenet-model/base
 
-# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_14 # Accuracy: 98.04%
-# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_10 # Accuracy: 95.74%
-# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_8 # Accuracy: 94.46%
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_14
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_10
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_8
 
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_14 # Accuracy: 98.08%
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_10 # Accuracy: 98.13%
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_8 # Accuracy: 98.00%
+# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_14
+# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_10
+# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_8
+
+# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_8_ensemble # 0.97930 -> 0.98270
+# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_8_ensemble_100
+# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_8_6_ensemble_100
 
 # TRAIN_DIR=./tmp/lenet-model/extr_grad_nearest_16_14
 # TRAIN_DIR=./tmp/lenet-model/extr_grad_nearest_16_10
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_nearest_16_8  # Accuracy: 89.79%
+# TRAIN_DIR=./tmp/lenet-model/extr_grad_nearest_16_8
 
 # TRAIN_DIR=./tmp/lenet-model/extr_grad_layer_stochastic_16_14
 
@@ -42,6 +47,7 @@ DATASET_DIR=~/tmp/mnist
 
 python train_image_classifier.py \
   --train_dir=${TRAIN_DIR} \
+  --num_epoches=100 \
   --dataset_name=mnist \
   --dataset_split_name=train \
   --dataset_dir=${DATASET_DIR} \
@@ -53,11 +59,11 @@ python train_image_classifier.py \
   --save_interval_secs=600 \
   --save_summaries_secs=10 \
   --log_every_n_steps=100 \
-  --optimizer=sgd \
+  --optimizer=momentum \
+  --momentum=0.9 \
   --learning_rate_decay_type=exponential \
   --learning_rate_decay_factor=0.95 \
-  --weight_decay=0 \
-  --extr_grad_quantizer=nearest,16,10;
-  # --extr_grad_quantizer=stochastic,16,14;
+  --weight_decay=0;
+  # --extr_grad_quantizer=stochastic,8,6;
 
 
