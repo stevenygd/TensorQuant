@@ -426,9 +426,12 @@ def main(_):
       logits, end_points = network_fn(images)
 
       # Specify the loss function #
-      total_loss = tf.losses.softmax_cross_entropy(
+      loss = tf.losses.softmax_cross_entropy(
           logits=logits, onehot_labels=labels,
           label_smoothing=FLAGS.label_smoothing, weights=1.0)
+      regularizer_losses = tf.add_n(tf.losses.get_regularization_losses())
+      total_loss = loss + regularizer_losses
+
 
       # Gather initial summaries.
       summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
@@ -451,7 +454,9 @@ def main(_):
       # Add summaries for losses.
       for loss in tf.get_collection(tf.GraphKeys.LOSSES):
         summaries.add(tf.summary.scalar('losses/%s' % loss.op.name, loss))
-      summaries.add(tf.summary.scalar('losses/total', total_loss))
+      summaries.add(tf.summary.scalar('losses_total', total_loss))
+      summaries.add(tf.summary.scalar('losses_regularization', regularizer_losses))
+      summaries.add(tf.summary.scalar('losses_classification', loss))
 
       #########################################
       # Configure the optimization procedure. #
@@ -463,10 +468,6 @@ def main(_):
 
       # Variables to train.
       variables_to_train = _get_variables_to_train()
-
-      # #  and returns a train_tensor and summary_op
-      # # Add total_loss to summary.
-      summaries.add(tf.summary.scalar('total_loss', total_loss))
 
       # Create gradient updates.
       # quantize 'clones_gradients'
@@ -514,7 +515,12 @@ def main(_):
       eval_gtrs= tf.squeeze(tf.argmax(labels, 1))
 
       acc_value, acc_update = tf.metrics.accuracy(eval_pred, eval_gtrs)
-      val_summary = tf.summary.scalar('val_acc', acc_value, collections=[])
+      val_summary_lst = []
+      val_summary_lst.append(tf.summary.scalar('val_acc', acc_value, collections=[]))
+      val_summary_lst.append(tf.summary.scalar('val_err', 1-acc_value, collections=[]))
+      val_summary_lst.append(
+              tf.summary.scalar('val_err_perc', 100*(1-acc_value), collections=[]))
+      val_summary = tf.summary.merge(val_summary_lst)
 
       num_batches = math.ceil(dataset.num_samples / (float(FLAGS.batch_size)) )
 
@@ -546,8 +552,8 @@ def main(_):
                 })
                 train_writer.add_summary(summary_value, i+e*num_training_batches)
 
-                print("[%d/%d] loss %.5f acc %.5f"\
-                     %(i, num_training_batches, loss_value, acc))
+                print("[%d/%d] loss %.5f err %.3f%%"\
+                     %(i, num_training_batches, loss_value, (1. - acc)*100))
                 sess.run(tf.local_variables_initializer())
 
             sess.run([update_op, acc_update], feed_dict={
@@ -567,12 +573,12 @@ def main(_):
           images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
           labels : batch_ys,
         })
-        print("Epoch[%d/%d] : valacc:%.5f"%(e, total_epoches, val_acc))
+        print("Epoch[%d/%d] : ValErr:%.3f%%"%(e, total_epoches, (1-val_acc)*100))
         train_writer.add_summary(val_summary_value, e)
 
         # Ensemble pass
         # if (e+1) % 5 == 0:
-        if (e+1) % 10 == 0 and e > 50:
+        if (e+1) % 20 == 0 :
             sess.run(variable_ensemble_ops)
             sess.run(ensemble_counter_update_op)
             print("Ensembled epoch %d weights"%e)
@@ -591,7 +597,7 @@ def main(_):
         images : np.reshape(batch_xs, (FLAGS.batch_size, 28, 28, 1)),
         labels : batch_ys,
       })
-      print("Ensembled network valacc:%.5f"%val_acc)
+      print("Ensembled network ValErro:%.3f%%"%((1-val_acc)*100))
       train_writer.add_summary(val_summary_value, total_epoches)
 
 if __name__ == '__main__':

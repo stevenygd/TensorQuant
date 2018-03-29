@@ -38,8 +38,7 @@ slim = tf.contrib.slim
 
 
 def lenet(images, num_classes=10, is_training=False, reuse=None,
-          dropout_keep_prob=1.,
-          # dropout_keep_prob=0.5,
+          dropout_keep_prob=0.5,
           prediction_fn=slim.softmax,
           scope='LeNet',
           conv2d=slim.conv2d,
@@ -84,8 +83,8 @@ def lenet(images, num_classes=10, is_training=False, reuse=None,
         end_points['Flatten'] = net
         # net = fully_connected(net, 1024, scope='fc3')
         net = fully_connected(net, 128, scope='fc3')
-        net = slim.dropout(net, dropout_keep_prob, is_training=is_training,
-                           scope='dropout3')
+        # net = slim.dropout(net, dropout_keep_prob, is_training=is_training,
+        #                    scope='dropout3')
         logits = fully_connected(net, num_classes, activation_fn=None,
                                       scope='fc4')
   end_points['Logits'] = logits

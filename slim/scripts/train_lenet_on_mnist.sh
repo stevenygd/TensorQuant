@@ -12,25 +12,15 @@
 # Where the checkpoint and logs will be saved to.
 
 # TRAIN_DIR=./tmp/lenet-model/test
-TRAIN_DIR=./tmp/lenet-model/base
+# TRAIN_DIR=./tmp/lenet-model/base
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_16_14_extr_layers_16_10
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_16_12_extr_layers_16_10
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_16_10_extr_layers_16_10
 
-# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_14
-# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_10
-# TRAIN_DIR=./tmp/lenet-model/intr_grad_stochastic_16_8
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_16_14_extr_others_16_14_extr_conv_16_10
 
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_14
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_10
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_8
-
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_8_ensemble # 0.97930 -> 0.98270
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_16_8_ensemble_100
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_stochastic_8_6_ensemble_100
-
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_nearest_16_14
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_nearest_16_10
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_nearest_16_8
-
-# TRAIN_DIR=./tmp/lenet-model/extr_grad_layer_stochastic_16_14
+# TRAIN_DIR=./tmp/lenet-model/intr_grad_16_14_extr_layers_16_10_nearest
+TRAIN_DIR=./tmp/lenet-model/intr_grad_16_14_intr_layers_16_10_nearest
 
 rm -r ${TRAIN_DIR}
 mkdir ${TRAIN_DIR}
@@ -47,13 +37,12 @@ DATASET_DIR=~/tmp/mnist
 
 python train_image_classifier.py \
   --train_dir=${TRAIN_DIR} \
-  --num_epoches=100 \
+  --num_epoches=200 \
   --dataset_name=mnist \
   --dataset_split_name=train \
   --dataset_dir=${DATASET_DIR} \
   --model_name=lenet \
   --preprocessing_name=lenet \
-  --max_number_of_steps=10000 \
   --batch_size=100 \
   --learning_rate=0.1 \
   --save_interval_secs=600 \
@@ -63,7 +52,8 @@ python train_image_classifier.py \
   --momentum=0.9 \
   --learning_rate_decay_type=exponential \
   --learning_rate_decay_factor=0.95 \
-  --weight_decay=0;
-  # --extr_grad_quantizer=stochastic,8,6;
+  --weight_decay=0.0005 \
+  --intr_grad_quantizer=nearest,16,14 \
+  --intr_qmap=./tmp/lenet-model/QMaps/extr_qmap.json;
 
 
